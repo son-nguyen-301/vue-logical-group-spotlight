@@ -9,7 +9,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -25,7 +27,38 @@
         "mac": "cmd+shift+l",
         "when": "editorTextFocus"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Vue Logical Group Spotlight",
+      "properties": {
+        "vueLogicalGroupSpotlight.colors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Color in any valid CSS format (hex, rgb, hsl)",
+            "pattern": "^(#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{8}|rgb\\(\\s*\\d+\\s*,\\s*\\d+\\s*,\\s*\\d+\\s*\\)|rgba\\(\\s*\\d+\\s*,\\s*\\d+\\s*,\\s*\\d+\\s*,\\s*[0-1](\\.\\d+)?\\s*\\)|hsl\\(\\s*\\d+\\s*,\\s*\\d+%\\s*,\\s*\\d+%\\s*\\)|hsla\\(\\s*\\d+\\s*,\\s*\\d+%\\s*,\\s*\\d+%\\s*,\\s*[0-1](\\.\\d+)?\\s*\\))$"
+          },
+          "default": [
+            "#4CAF5019",
+            "#2196F319",
+            "#9C27B019",
+            "#FF980019",
+            "#00968819",
+            "#9C27B019",
+            "#3F51B519",
+            "#00BCD419"
+          ],
+          "description": "Colors for logical groups. The colors will be used in sequence for each group found."
+        },
+        "vueLogicalGroupSpotlight.defaultOpacity": {
+          "type": "number",
+          "default": 0.1,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Default opacity for group highlighting when using colors without opacity (0-1)"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "yarn run compile",
