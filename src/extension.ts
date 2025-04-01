@@ -6,19 +6,34 @@ interface LogicalGroup {
 	startLine: number;
 	endLine: number;
 	name: string;
+	color: string;
 }
+
+// Predefined colors that work well in both light and dark themes
+const GROUP_COLORS = [
+	'rgba(255, 182, 193, 0.2)',  // Light pink
+	'rgba(144, 238, 144, 0.2)',  // Light green
+	'rgba(173, 216, 230, 0.2)',  // Light blue
+	'rgba(255, 218, 185, 0.2)',  // Peach
+	'rgba(221, 160, 221, 0.2)',  // Plum
+	'rgba(176, 196, 222, 0.2)',  // Steel blue
+	'rgba(255, 255, 224, 0.2)',  // Light yellow
+	'rgba(176, 224, 230, 0.2)',  // Powder blue
+];
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
 	let activeEditor = vscode.window.activeTextEditor;
-	let decorationType: vscode.TextEditorDecorationType | undefined;
+	let decorationTypes: vscode.TextEditorDecorationType[] = [];
 
-	// Create decoration type for spotlight
-	const createDecorationType = () => {
+	// Create decoration type for spotlight with specific color
+	const createDecorationType = (color: string) => {
 		return vscode.window.createTextEditorDecorationType({
-			backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
+			backgroundColor: color,
 			isWholeLine: true,
+			overviewRulerColor: color,
+			overviewRulerLane: vscode.OverviewRulerLane.Full
 		});
 	};
 
@@ -29,6 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
 		const lines = text.split('\n');
 
 		let currentGroup: LogicalGroup | null = null;
+		let colorIndex = 0;
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
@@ -41,12 +57,14 @@ export function activate(context: vscode.ExtensionContext) {
 					groups.push(currentGroup);
 				}
 
-				// Start a new group
+				// Start a new group with a color
 				currentGroup = {
 					startLine: i + 1,
 					endLine: i + 1,
-					name: match[1].trim()
+					name: match[1].trim(),
+					color: GROUP_COLORS[colorIndex % GROUP_COLORS.length]
 				};
+				colorIndex++;
 			}
 		}
 
@@ -65,29 +83,28 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		const groups = findLogicalGroups(activeEditor.document);
-		const decorations: vscode.DecorationOptions[] = [];
+		// Dispose of existing decorations
+		decorationTypes.forEach(type => type.dispose());
+		decorationTypes = [];
 
+		const groups = findLogicalGroups(activeEditor.document);
+		
 		groups.forEach(group => {
+			const decorationType = createDecorationType(group.color);
 			const range = new vscode.Range(
 				new vscode.Position(group.startLine, 0),
 				new vscode.Position(group.endLine, 0)
 			);
-			decorations.push({ range });
+			activeEditor!.setDecorations(decorationType, [{ range }]);
+			decorationTypes.push(decorationType);
 		});
-
-		if (decorationType) {
-			decorationType.dispose();
-		}
-		decorationType = createDecorationType();
-		activeEditor.setDecorations(decorationType, decorations);
 	};
 
 	// Register the toggle spotlight command
 	const disposable = vscode.commands.registerCommand('vue-logical-group-spotlight.toggleSpotlight', () => {
-		if (decorationType) {
-			decorationType.dispose();
-			decorationType = undefined;
+		if (decorationTypes.length > 0) {
+			decorationTypes.forEach(type => type.dispose());
+			decorationTypes = [];
 		} else {
 			updateDecorations();
 		}
@@ -96,14 +113,14 @@ export function activate(context: vscode.ExtensionContext) {
 	// Update decorations when the active editor changes
 	const editorChangeDisposable = vscode.window.onDidChangeActiveTextEditor(editor => {
 		activeEditor = editor;
-		if (decorationType) {
+		if (decorationTypes.length > 0) {
 			updateDecorations();
 		}
 	});
 
 	// Update decorations when the document changes
 	const documentChangeDisposable = vscode.workspace.onDidChangeTextDocument(event => {
-		if (activeEditor && event.document === activeEditor.document && decorationType) {
+		if (activeEditor && event.document === activeEditor.document && decorationTypes.length > 0) {
 			updateDecorations();
 		}
 	});
