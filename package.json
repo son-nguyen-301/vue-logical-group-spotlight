@@ -14,8 +14,16 @@
   "contributes": {
     "commands": [
       {
-        "command": "vue-logical-group-spotlight.helloWorld",
-        "title": "Hello World"
+        "command": "vue-logical-group-spotlight.toggleSpotlight",
+        "title": "Toggle Logical Group Spotlight"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "vue-logical-group-spotlight.toggleSpotlight",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l",
+        "when": "editorTextFocus"
       }
     ]
   },
