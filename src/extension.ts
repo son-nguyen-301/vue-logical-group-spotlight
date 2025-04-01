@@ -94,16 +94,29 @@ export function activate(context: vscode.ExtensionContext) {
 
 		let currentGroup: LogicalGroup | null = null;
 		let groupIndex = 0;
+		let lastNonEmptyLine = -1;
+
+		// Helper function to check if a line is empty or only contains whitespace
+		const isEmptyLine = (line: string): boolean => {
+			return line.trim().length === 0;
+		};
+
+		// Helper function to add group to the list
+		const addGroup = (group: LogicalGroup, endLine: number) => {
+			if (group.startLine <= endLine) {
+				group.endLine = endLine;
+				groups.push(group);
+			}
+		};
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			const match = line.match(/\/\/\s*LOGICAL GROUP:\s*(.+)/);
 
 			if (match) {
-				// If we have a previous group, close it
+				// If we have a previous group, close it at the last non-empty line
 				if (currentGroup) {
-					currentGroup.endLine = i - 1;
-					groups.push(currentGroup);
+					addGroup(currentGroup, lastNonEmptyLine);
 				}
 
 				// Get color from the array or fallback to the first color
@@ -118,13 +131,15 @@ export function activate(context: vscode.ExtensionContext) {
 					color: processColor(color, defaultOpacity)
 				};
 				groupIndex++;
+				lastNonEmptyLine = i; // Group name line is always considered non-empty
+			} else if (!isEmptyLine(line)) {
+				lastNonEmptyLine = i;
 			}
 		}
 
 		// Close the last group if exists
 		if (currentGroup) {
-			currentGroup.endLine = lines.length - 1;
-			groups.push(currentGroup);
+			addGroup(currentGroup, lastNonEmptyLine);
 		}
 
 		return groups;
