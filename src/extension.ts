@@ -11,23 +11,59 @@ type LogicalGroup = {
 
 class GroupNameWidget implements vscode.Disposable {
 	private readonly _widget: vscode.StatusBarItem;
+	private _currentGroups: LogicalGroup[] = [];
 
 	constructor() {
 		this._widget = vscode.window.createStatusBarItem(
 			vscode.StatusBarAlignment.Right,
 			1000
 		);
+		this._widget.command = 'vue-logical-group-spotlight.selectGroup';
 	}
 
-	updateContent(groupName: string | undefined, color: string | undefined) {
-		if (groupName && color) {
-			this._widget.text = `📍 ${groupName}`;
-			// Convert the color to a hex format without opacity for the status bar
-			const hexColor = color.replace(/[^0-9A-Fa-f]/g, '').slice(0, 6);
+	updateContent(groups: LogicalGroup[], currentGroup: LogicalGroup | undefined) {
+		this._currentGroups = groups;
+		if (currentGroup) {
+			this._widget.text = `$(list-selection) ${currentGroup.name}`;
+			const hexColor = processColor(currentGroup.color, 1.0, true).replace(/[^0-9A-Fa-f]/g, '').slice(0, 6);
 			this._widget.backgroundColor = new vscode.ThemeColor(`#${hexColor}`);
+			this._widget.tooltip = 'Click to select a group';
 			this._widget.show();
 		} else {
 			this._widget.hide();
+		}
+	}
+
+	async showQuickPick() {
+		if (this._currentGroups.length === 0) {return;}
+
+		const items = this._currentGroups.map(group => ({
+			label: group.name,
+			description: `Line ${group.startLine + 1}`,
+			group
+		}));
+
+		const selected = await vscode.window.showQuickPick(items, {
+			placeHolder: 'Select a group to navigate to'
+		});
+
+		if (selected && vscode.window.activeTextEditor) {
+			const editor = vscode.window.activeTextEditor;
+			const position = new vscode.Position(selected.group.startLine, 0);
+			
+			// Set cursor position without selection
+			editor.selection = new vscode.Selection(position, position);
+			editor.revealRange(
+				new vscode.Range(position, position),
+				vscode.TextEditorRevealType.AtTop
+			);
+
+			// Focus back to the editor
+			await vscode.window.showTextDocument(editor.document, {
+				viewColumn: editor.viewColumn,
+				selection: editor.selection,
+				preserveFocus: false
+			});
 		}
 	}
 
@@ -165,22 +201,24 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.registerWebviewViewProvider('logicalGroupCurrentHeader', headerProvider)
 	);
 
+	// Register the select group command
+	const selectGroupCommand = vscode.commands.registerCommand('vue-logical-group-spotlight.selectGroup', () => {
+		if (groupNameWidget) {
+			groupNameWidget.showQuickPick();
+		}
+	});
+
+	context.subscriptions.push(selectGroupCommand);
+
 	// Create decoration type for spotlight with specific color
 	const createDecorationType = (color: string, isGroupName: boolean = false) => {
 		if (isGroupName) {
-			const headerColor = processColor(color, 1.0, true);
+			// Make the header color brighter for better contrast
+			const headerColor = processColor(color, 1, true); // Increased opacity to 95% for better contrast
 			return vscode.window.createTextEditorDecorationType({
 				backgroundColor: headerColor,
-				color: 'var(--vscode-editor-foreground)',
-				isWholeLine: true,
-				overviewRulerColor: headerColor,
-				overviewRulerLane: vscode.OverviewRulerLane.Full,
+				color: '#FFFFFF', // White text
 				fontWeight: 'bold',
-				letterSpacing: '0.5px',
-				before: {
-					contentText: '  📌 ',
-					color: 'var(--vscode-editor-foreground)',
-				}
 			});
 		}
 		return vscode.window.createTextEditorDecorationType({
@@ -283,10 +321,8 @@ export function activate(context: vscode.ExtensionContext) {
 	const updateDecorations = () => {
 		if (!activeEditor || !isEnabled) {
 			if (groupNameWidget) {
-				groupNameWidget.updateContent(undefined, undefined);
+				groupNameWidget.updateContent([], undefined);
 			}
-			headerProvider.updateGroup(undefined);
-			stickyHeaderProvider.updateGroups([]);
 			return;
 		}
 
@@ -295,44 +331,40 @@ export function activate(context: vscode.ExtensionContext) {
 		decorationTypes = [];
 
 		const groups = findLogicalGroups(activeEditor.document);
-		stickyHeaderProvider.updateGroups(groups);
 		
 		groups.forEach(group => {
+			if (!activeEditor) {return;}
+
 			// Create decoration for the group content (excluding the group name line)
 			const contentDecorationType = createDecorationType(group.color);
 			const contentRange = new vscode.Range(
 				new vscode.Position(group.startLine + 1, 0),
 				new vscode.Position(group.endLine, Number.MAX_VALUE)
 			);
-			activeEditor!.setDecorations(contentDecorationType, [{ range: contentRange }]);
+			activeEditor.setDecorations(contentDecorationType, [{ range: contentRange }]);
 			decorationTypes.push(contentDecorationType);
 
 			// Create decoration for the group name with enhanced visibility
 			const headerDecorationType = createDecorationType(group.color, true);
+			
+			// Apply decoration to the entire line for the group name
 			const headerRange = new vscode.Range(
 				new vscode.Position(group.startLine, 0),
 				new vscode.Position(group.startLine, Number.MAX_VALUE)
 			);
-			activeEditor!.setDecorations(headerDecorationType, [{ range: headerRange }]);
+			activeEditor.setDecorations(headerDecorationType, [{ range: headerRange }]);
 			decorationTypes.push(headerDecorationType);
 		});
 
-		// Update group name widget based on visible range
-		const visibleRange = activeEditor.visibleRanges[0];
-		const visibleGroup = findVisibleGroup(groups, visibleRange);
-		
+		// Update group name widget based on cursor position
 		if (!groupNameWidget) {
 			groupNameWidget = new GroupNameWidget();
 			context.subscriptions.push(groupNameWidget);
 		}
-		
-		groupNameWidget.updateContent(
-			visibleGroup?.name,
-			visibleGroup ? processColor(visibleGroup.color, 1.0, true) : undefined
-		);
 
-		// Update the header view
-		headerProvider.updateGroup(visibleGroup);
+		const currentLine = activeEditor.selection.active.line;
+		const currentGroup = findCurrentGroup(groups, currentLine);
+		groupNameWidget.updateContent(groups, currentGroup);
 	};
 
 	// Register the toggle spotlight command
@@ -342,7 +374,7 @@ export function activate(context: vscode.ExtensionContext) {
 			decorationTypes.forEach(type => type.dispose());
 			decorationTypes = [];
 			if (groupNameWidget) {
-				groupNameWidget.updateContent(undefined, undefined);
+				groupNameWidget.updateContent([], undefined);
 			}
 			headerProvider.updateGroup(undefined);
 			stickyHeaderProvider.updateGroups([]);
