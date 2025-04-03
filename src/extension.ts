@@ -7,6 +7,7 @@ type LogicalGroup = {
 	endLine: number;
 	name: string;
 	color: string;
+	isCollapsed?: boolean;
 }
 
 class GroupNameWidget implements vscode.Disposable {
@@ -181,6 +182,28 @@ class GroupHeaderProvider implements vscode.WebviewViewProvider {
 	}
 }
 
+class FoldingStateManager {
+	private static _collapsedGroups = new Set<string>();
+
+	static isCollapsed(document: vscode.TextDocument, line: number): boolean {
+		const key = `${document.uri.toString()}:${line}`;
+		return this._collapsedGroups.has(key);
+	}
+
+	static toggleCollapsed(document: vscode.TextDocument, line: number) {
+		const key = `${document.uri.toString()}:${line}`;
+		if (this._collapsedGroups.has(key)) {
+			this._collapsedGroups.delete(key);
+		} else {
+			this._collapsedGroups.add(key);
+		}
+	}
+
+	static clear() {
+		this._collapsedGroups.clear();
+	}
+}
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -210,15 +233,25 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(selectGroupCommand);
 
+	// Register the toggle collapse command
+	const toggleCollapseCommand = vscode.commands.registerCommand('vue-logical-group-spotlight.toggleCollapse', async (line: number) => {
+		if (!activeEditor) {return;}
+
+		FoldingStateManager.toggleCollapsed(activeEditor.document, line);
+		updateDecorations();
+	});
+
+	context.subscriptions.push(toggleCollapseCommand);
+
 	// Create decoration type for spotlight with specific color
 	const createDecorationType = (color: string, isGroupName: boolean = false) => {
 		if (isGroupName) {
-			// Make the header color brighter for better contrast
-			const headerColor = processColor(color, 1, true); // Increased opacity to 95% for better contrast
+			const headerColor = processColor(color, 1, true);
 			return vscode.window.createTextEditorDecorationType({
 				backgroundColor: headerColor,
-				color: '#FFFFFF', // White text
+				color: '#FFFFFF',
 				fontWeight: 'bold',
+				textDecoration: 'none; padding-left: 24px;' // Add padding to prevent overlap
 			});
 		}
 		return vscode.window.createTextEditorDecorationType({
@@ -291,6 +324,21 @@ export function activate(context: vscode.ExtensionContext) {
 		return groups;
 	};
 
+	class LogicalGroupFoldingRangeProvider implements vscode.FoldingRangeProvider {
+		provideFoldingRanges(
+			document: vscode.TextDocument,
+			context: vscode.FoldingContext,
+			token: vscode.CancellationToken
+		): vscode.FoldingRange[] {
+			const groups = findLogicalGroups(document);
+			return groups.map(group => new vscode.FoldingRange(
+				group.startLine,
+				group.endLine,
+				vscode.FoldingRangeKind.Region
+			));
+		}
+	}
+
 	// Find which group contains the current cursor position
 	const findCurrentGroup = (groups: LogicalGroup[], line: number): LogicalGroup | undefined => {
 		return groups.find(group => line >= group.startLine && line <= group.endLine);
@@ -326,7 +374,6 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		// Dispose of existing decorations
 		decorationTypes.forEach(type => type.dispose());
 		decorationTypes = [];
 
@@ -335,25 +382,46 @@ export function activate(context: vscode.ExtensionContext) {
 		groups.forEach(group => {
 			if (!activeEditor) {return;}
 
-			// Create decoration for the group content (excluding the group name line)
+			const isCollapsed = FoldingStateManager.isCollapsed(activeEditor.document, group.startLine);
+			group.isCollapsed = isCollapsed;
+
+			// Create separate decorations for the icon and the background
+			const headerRange = new vscode.Range(
+				new vscode.Position(group.startLine, 0),
+				new vscode.Position(group.startLine, Number.MAX_VALUE)
+			);
+
+			// Create the background decoration type
+			const headerBackgroundType = vscode.window.createTextEditorDecorationType({
+				backgroundColor: processColor(group.color, 1, true),
+				color: '#FFFFFF',
+				fontWeight: 'bold',
+				isWholeLine: true,
+			});
+
+			// Apply the decoration
+			activeEditor.setDecorations(headerBackgroundType, [{ 
+				range: headerRange,
+				hoverMessage: 'Click to toggle group visibility'
+			}]);
+
+			decorationTypes.push(headerBackgroundType);
+
+			// Create content decoration
 			const contentDecorationType = createDecorationType(group.color);
 			const contentRange = new vscode.Range(
 				new vscode.Position(group.startLine + 1, 0),
 				new vscode.Position(group.endLine, Number.MAX_VALUE)
 			);
-			activeEditor.setDecorations(contentDecorationType, [{ range: contentRange }]);
-			decorationTypes.push(contentDecorationType);
 
-			// Create decoration for the group name with enhanced visibility
-			const headerDecorationType = createDecorationType(group.color, true);
-			
-			// Apply decoration to the entire line for the group name
-			const headerRange = new vscode.Range(
-				new vscode.Position(group.startLine, 0),
-				new vscode.Position(group.startLine, Number.MAX_VALUE)
-			);
-			activeEditor.setDecorations(headerDecorationType, [{ range: headerRange }]);
-			decorationTypes.push(headerDecorationType);
+			// Only show content if not collapsed
+			if (!isCollapsed) {
+				activeEditor.setDecorations(contentDecorationType, [{ range: contentRange }]);
+			} else {
+				// When collapsed, hide the content by setting an empty range
+				activeEditor.setDecorations(contentDecorationType, []);
+			}
+			decorationTypes.push(contentDecorationType);
 		});
 
 		// Update group name widget based on cursor position
@@ -365,6 +433,7 @@ export function activate(context: vscode.ExtensionContext) {
 		const currentLine = activeEditor.selection.active.line;
 		const currentGroup = findCurrentGroup(groups, currentLine);
 		groupNameWidget.updateContent(groups, currentGroup);
+		stickyHeaderProvider.updateGroups(groups);
 	};
 
 	// Register the toggle spotlight command
@@ -382,6 +451,58 @@ export function activate(context: vscode.ExtensionContext) {
 			updateDecorations();
 		}
 		vscode.window.showInformationMessage(`Logical Group Spotlight ${isEnabled ? 'enabled' : 'disabled'}`);
+	});
+
+	// Register folding range provider
+	const foldingRangeProvider = new LogicalGroupFoldingRangeProvider();
+	context.subscriptions.push(
+		vscode.languages.registerFoldingRangeProvider(
+			{ pattern: '**/*' },
+			foldingRangeProvider
+		)
+	);
+
+	// Update the click handler
+	const clickHandler = vscode.window.onDidChangeTextEditorSelection(async event => {
+		if (!activeEditor || !isEnabled || event.kind !== vscode.TextEditorSelectionChangeKind.Mouse) {
+			return;
+		}
+
+		const clickedLine = event.selections[0].active.line;
+		const groups = findLogicalGroups(activeEditor.document);
+		const clickedGroup = groups.find(group => group.startLine === clickedLine);
+
+		if (clickedGroup) {
+			const wasCollapsed = FoldingStateManager.isCollapsed(activeEditor.document, clickedGroup.startLine);
+			FoldingStateManager.toggleCollapsed(activeEditor.document, clickedGroup.startLine);
+			
+			try {
+				if (!wasCollapsed) {
+					// Create a selection from start to end of the group content
+					const foldingSelection = new vscode.Selection(
+						clickedGroup.startLine + 1, // Start from the line after the header
+						0,
+						clickedGroup.endLine,
+						activeEditor.document.lineAt(clickedGroup.endLine).text.length
+					);
+					
+					// Apply the selection and fold
+					activeEditor.selection = foldingSelection;
+					await vscode.commands.executeCommand('editor.fold');
+					
+					// Restore cursor to the header line
+					const headerPosition = new vscode.Position(clickedGroup.startLine, 0);
+					activeEditor.selection = new vscode.Selection(headerPosition, headerPosition);
+				} else {
+					// Unfold the group
+					await vscode.commands.executeCommand('editor.unfold');
+				}
+			} catch (error) {
+				console.error('Error while folding:', error);
+			}
+			
+			updateDecorations();
+		}
 	});
 
 	// Update when cursor position changes
@@ -429,7 +550,8 @@ export function activate(context: vscode.ExtensionContext) {
 		scrollChangeDisposable,
 		editorChangeDisposable,
 		documentChangeDisposable,
-		configChangeDisposable
+		configChangeDisposable,
+		clickHandler
 	);
 }
 

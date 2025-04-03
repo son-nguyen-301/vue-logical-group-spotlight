@@ -18,6 +18,10 @@
       {
         "command": "vue-logical-group-spotlight.toggleSpotlight",
         "title": "Toggle Logical Group Spotlight"
+      },
+      {
+        "command": "vue-logical-group-spotlight.toggleCollapse",
+        "title": "Toggle Logical Group Collapse"
       }
     ],
     "keybindings": [
