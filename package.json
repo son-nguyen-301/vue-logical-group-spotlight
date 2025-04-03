@@ -58,6 +58,24 @@
           "description": "Default opacity for group highlighting when using colors without opacity (0-1)"
         }
       }
+    },
+    "viewsContainers": {
+      "editor": [
+        {
+          "id": "logicalGroupHeader",
+          "title": "Logical Group",
+          "icon": "$(symbol-class)"
+        }
+      ]
+    },
+    "views": {
+      "logicalGroupHeader": [
+        {
+          "id": "logicalGroupCurrentHeader",
+          "name": "Current Group",
+          "type": "webview"
+        }
+      ]
     }
   },
   "scripts": {
