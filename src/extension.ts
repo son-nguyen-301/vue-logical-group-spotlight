@@ -182,25 +182,80 @@ class GroupHeaderProvider implements vscode.WebviewViewProvider {
 	}
 }
 
-class FoldingStateManager {
-	private static _collapsedGroups = new Set<string>();
+// Find logical groups in the current document
+const findLogicalGroups = (document: vscode.TextDocument): LogicalGroup[] => {
+	const groups: LogicalGroup[] = [];
+	const text = document.getText();
+	const lines = text.split('\n');
+	const config = vscode.workspace.getConfiguration('vueLogicalGroupSpotlight');
+	const colors = config.get<string[]>('colors') || [];
+	const defaultOpacity = config.get<number>('defaultOpacity') || 0.1;
 
-	static isCollapsed(document: vscode.TextDocument, line: number): boolean {
-		const key = `${document.uri.toString()}:${line}`;
-		return this._collapsedGroups.has(key);
-	}
+	let currentGroup: LogicalGroup | null = null;
+	let groupIndex = 0;
+	let lastNonEmptyLine = -1;
 
-	static toggleCollapsed(document: vscode.TextDocument, line: number) {
-		const key = `${document.uri.toString()}:${line}`;
-		if (this._collapsedGroups.has(key)) {
-			this._collapsedGroups.delete(key);
-		} else {
-			this._collapsedGroups.add(key);
+	// Helper function to check if a line is empty or only contains whitespace
+	const isEmptyLine = (line: string): boolean => {
+		return line.trim().length === 0;
+	};
+
+	// Helper function to add group to the list
+	const addGroup = (group: LogicalGroup, endLine: number) => {
+		if (group.startLine <= endLine) {
+			group.endLine = endLine;
+			groups.push(group);
+		}
+	};
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		const match = line.match(/\/\/\s*VLG:\s*(.+)/);
+
+		if (match) {
+			// If we have a previous group, close it at the last non-empty line
+			if (currentGroup) {
+				addGroup(currentGroup, lastNonEmptyLine);
+			}
+
+			// Get color from the array or fallback to the first color
+			const color = colors[groupIndex % colors.length] || colors[0];
+			const groupName = match[1].trim();
+			
+			// Start a new group with the next color
+			currentGroup = {
+				startLine: i,
+				endLine: i + 1,
+				name: groupName,
+				color: processColor(color, defaultOpacity)
+			};
+			groupIndex++;
+			lastNonEmptyLine = i; // Group name line is always considered non-empty
+		} else if (!isEmptyLine(line)) {
+			lastNonEmptyLine = i;
 		}
 	}
 
-	static clear() {
-		this._collapsedGroups.clear();
+	// Close the last group if exists
+	if (currentGroup) {
+		addGroup(currentGroup, lastNonEmptyLine);
+	}
+
+	return groups;
+};
+
+class LogicalGroupFoldingRangeProvider implements vscode.FoldingRangeProvider {
+	provideFoldingRanges(
+		document: vscode.TextDocument,
+		context: vscode.FoldingContext,
+		token: vscode.CancellationToken
+	): vscode.FoldingRange[] {
+		const groups = findLogicalGroups(document);
+		return groups.map((group: LogicalGroup) => new vscode.FoldingRange(
+			group.startLine,
+			group.endLine,
+			vscode.FoldingRangeKind.Region
+		));
 	}
 }
 
@@ -213,6 +268,7 @@ export function activate(context: vscode.ExtensionContext) {
 	let groupNameWidget: GroupNameWidget | undefined;
 	const headerProvider = new GroupHeaderProvider();
 	const stickyHeaderProvider = new StickyHeaderProvider();
+	const foldingRangeProvider = new LogicalGroupFoldingRangeProvider();
 
 	// Register the sticky header provider
 	context.subscriptions.push(
@@ -224,6 +280,14 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.registerWebviewViewProvider('logicalGroupCurrentHeader', headerProvider)
 	);
 
+	// Register folding range provider
+	context.subscriptions.push(
+		vscode.languages.registerFoldingRangeProvider(
+			{ pattern: '**/*' },
+			foldingRangeProvider
+		)
+	);
+
 	// Register the select group command
 	const selectGroupCommand = vscode.commands.registerCommand('vue-logical-group-spotlight.selectGroup', () => {
 		if (groupNameWidget) {
@@ -232,16 +296,6 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	context.subscriptions.push(selectGroupCommand);
-
-	// Register the toggle collapse command
-	const toggleCollapseCommand = vscode.commands.registerCommand('vue-logical-group-spotlight.toggleCollapse', async (line: number) => {
-		if (!activeEditor) {return;}
-
-		FoldingStateManager.toggleCollapsed(activeEditor.document, line);
-		updateDecorations();
-	});
-
-	context.subscriptions.push(toggleCollapseCommand);
 
 	// Create decoration type for spotlight with specific color
 	const createDecorationType = (color: string, isGroupName: boolean = false) => {
@@ -261,83 +315,6 @@ export function activate(context: vscode.ExtensionContext) {
 			overviewRulerLane: vscode.OverviewRulerLane.Full
 		});
 	};
-
-	// Find logical groups in the current document
-	const findLogicalGroups = (document: vscode.TextDocument): LogicalGroup[] => {
-		const groups: LogicalGroup[] = [];
-		const text = document.getText();
-		const lines = text.split('\n');
-		const config = vscode.workspace.getConfiguration('vueLogicalGroupSpotlight');
-		const colors = config.get<string[]>('colors') || [];
-		const defaultOpacity = config.get<number>('defaultOpacity') || 0.1;
-
-		let currentGroup: LogicalGroup | null = null;
-		let groupIndex = 0;
-		let lastNonEmptyLine = -1;
-
-		// Helper function to check if a line is empty or only contains whitespace
-		const isEmptyLine = (line: string): boolean => {
-			return line.trim().length === 0;
-		};
-
-		// Helper function to add group to the list
-		const addGroup = (group: LogicalGroup, endLine: number) => {
-			if (group.startLine <= endLine) {
-				group.endLine = endLine;
-				groups.push(group);
-			}
-		};
-
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			const match = line.match(/\/\/\s*VLG:\s*(.+)/);
-
-			if (match) {
-				// If we have a previous group, close it at the last non-empty line
-				if (currentGroup) {
-					addGroup(currentGroup, lastNonEmptyLine);
-				}
-
-				// Get color from the array or fallback to the first color
-				const color = colors[groupIndex % colors.length] || colors[0];
-				const groupName = match[1].trim();
-				
-				// Start a new group with the next color
-				currentGroup = {
-					startLine: i,
-					endLine: i + 1,
-					name: groupName,
-					color: processColor(color, defaultOpacity)
-				};
-				groupIndex++;
-				lastNonEmptyLine = i; // Group name line is always considered non-empty
-			} else if (!isEmptyLine(line)) {
-				lastNonEmptyLine = i;
-			}
-		}
-
-		// Close the last group if exists
-		if (currentGroup) {
-			addGroup(currentGroup, lastNonEmptyLine);
-		}
-
-		return groups;
-	};
-
-	class LogicalGroupFoldingRangeProvider implements vscode.FoldingRangeProvider {
-		provideFoldingRanges(
-			document: vscode.TextDocument,
-			context: vscode.FoldingContext,
-			token: vscode.CancellationToken
-		): vscode.FoldingRange[] {
-			const groups = findLogicalGroups(document);
-			return groups.map(group => new vscode.FoldingRange(
-				group.startLine,
-				group.endLine,
-				vscode.FoldingRangeKind.Region
-			));
-		}
-	}
 
 	// Find which group contains the current cursor position
 	const findCurrentGroup = (groups: LogicalGroup[], line: number): LogicalGroup | undefined => {
@@ -382,10 +359,7 @@ export function activate(context: vscode.ExtensionContext) {
 		groups.forEach(group => {
 			if (!activeEditor) {return;}
 
-			const isCollapsed = FoldingStateManager.isCollapsed(activeEditor.document, group.startLine);
-			group.isCollapsed = isCollapsed;
-
-			// Create separate decorations for the icon and the background
+			// Create decoration for the group header
 			const headerRange = new vscode.Range(
 				new vscode.Position(group.startLine, 0),
 				new vscode.Position(group.startLine, Number.MAX_VALUE)
@@ -402,25 +376,17 @@ export function activate(context: vscode.ExtensionContext) {
 			// Apply the decoration
 			activeEditor.setDecorations(headerBackgroundType, [{ 
 				range: headerRange,
-				hoverMessage: 'Click to toggle group visibility'
 			}]);
 
 			decorationTypes.push(headerBackgroundType);
 
-			// Create content decoration
+			// Create and apply content decoration
 			const contentDecorationType = createDecorationType(group.color);
 			const contentRange = new vscode.Range(
 				new vscode.Position(group.startLine + 1, 0),
 				new vscode.Position(group.endLine, Number.MAX_VALUE)
 			);
-
-			// Only show content if not collapsed
-			if (!isCollapsed) {
-				activeEditor.setDecorations(contentDecorationType, [{ range: contentRange }]);
-			} else {
-				// When collapsed, hide the content by setting an empty range
-				activeEditor.setDecorations(contentDecorationType, []);
-			}
+			activeEditor.setDecorations(contentDecorationType, [{ range: contentRange }]);
 			decorationTypes.push(contentDecorationType);
 		});
 
@@ -451,58 +417,6 @@ export function activate(context: vscode.ExtensionContext) {
 			updateDecorations();
 		}
 		vscode.window.showInformationMessage(`Logical Group Spotlight ${isEnabled ? 'enabled' : 'disabled'}`);
-	});
-
-	// Register folding range provider
-	const foldingRangeProvider = new LogicalGroupFoldingRangeProvider();
-	context.subscriptions.push(
-		vscode.languages.registerFoldingRangeProvider(
-			{ pattern: '**/*' },
-			foldingRangeProvider
-		)
-	);
-
-	// Update the click handler
-	const clickHandler = vscode.window.onDidChangeTextEditorSelection(async event => {
-		if (!activeEditor || !isEnabled || event.kind !== vscode.TextEditorSelectionChangeKind.Mouse) {
-			return;
-		}
-
-		const clickedLine = event.selections[0].active.line;
-		const groups = findLogicalGroups(activeEditor.document);
-		const clickedGroup = groups.find(group => group.startLine === clickedLine);
-
-		if (clickedGroup) {
-			const wasCollapsed = FoldingStateManager.isCollapsed(activeEditor.document, clickedGroup.startLine);
-			FoldingStateManager.toggleCollapsed(activeEditor.document, clickedGroup.startLine);
-			
-			try {
-				if (!wasCollapsed) {
-					// Create a selection from start to end of the group content
-					const foldingSelection = new vscode.Selection(
-						clickedGroup.startLine + 1, // Start from the line after the header
-						0,
-						clickedGroup.endLine,
-						activeEditor.document.lineAt(clickedGroup.endLine).text.length
-					);
-					
-					// Apply the selection and fold
-					activeEditor.selection = foldingSelection;
-					await vscode.commands.executeCommand('editor.fold');
-					
-					// Restore cursor to the header line
-					const headerPosition = new vscode.Position(clickedGroup.startLine, 0);
-					activeEditor.selection = new vscode.Selection(headerPosition, headerPosition);
-				} else {
-					// Unfold the group
-					await vscode.commands.executeCommand('editor.unfold');
-				}
-			} catch (error) {
-				console.error('Error while folding:', error);
-			}
-			
-			updateDecorations();
-		}
 	});
 
 	// Update when cursor position changes
@@ -550,8 +464,7 @@ export function activate(context: vscode.ExtensionContext) {
 		scrollChangeDisposable,
 		editorChangeDisposable,
 		documentChangeDisposable,
-		configChangeDisposable,
-		clickHandler
+		configChangeDisposable
 	);
 }
 
