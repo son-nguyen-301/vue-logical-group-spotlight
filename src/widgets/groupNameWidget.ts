@@ -17,7 +17,7 @@ export class GroupNameWidget implements vscode.Disposable {
     updateContent(groups: LogicalGroup[], currentGroup: LogicalGroup | undefined) {
         this._currentGroups = groups;
         if (currentGroup) {
-            this._widget.text = `$(list-selection) ${currentGroup.name}`;
+            this._widget.text = `$(list-selection) GROUP: ${currentGroup.name}`;
             const hexColor = processColor(currentGroup.color, 1.0, true).replace(/[^0-9A-Fa-f]/g, '').slice(0, 6);
             this._widget.backgroundColor = new vscode.ThemeColor(`#${hexColor}`);
             this._widget.tooltip = 'Click to select a group';
